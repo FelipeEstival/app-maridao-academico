@@ -1,0 +1,49 @@
+{
+  "name": "mobile-sdk57",
+  "main": "expo-router/entry",
+  "version": "1.0.0",
+  "dependencies": {
+    "@expo/ui": "~58.0.9",
+    "expo": "^58.0.0",
+    "expo-constants": "~58.0.9",
+    "expo-crypto": "~58.0.8",
+    "expo-device": "~58.0.3",
+    "expo-font": "~58.0.4",
+    "expo-glass-effect": "~58.0.3",
+    "expo-image": "~58.0.8",
+    "expo-linking": "~58.0.9",
+    "expo-router": "~58.0.10",
+    "expo-splash-screen": "~58.0.2",
+    "expo-status-bar": "~58.0.2",
+    "expo-symbols": "~58.0.3",
+    "expo-system-ui": "~58.0.4",
+    "expo-web-browser": "~58.0.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.0-rc.3",
+    "react-native-gesture-handler": "~3.2.1",
+    "react-native-reanimated": "4.7.0",
+    "react-native-safe-area-context": "~5.9.1",
+    "react-native-screens": "~4.28.0",
+    "react-native-web": "~0.21.0",
+    "react-native-worklets": "0.13.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~58.0.4",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "reset-project": "node ./scripts/reset-project.js",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "lint": "expo lint",
+    "test:calendar": "node --test tests/calendar.test.mjs",
+    "test:selection": "node --test tests/selection.test.mjs",
+    "test:local-data": "node --test tests/local-data.test.mjs"
+  },
+  "private": true
+}
