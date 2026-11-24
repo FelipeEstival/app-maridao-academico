@@ -8,6 +8,7 @@ type Account = {
   name: string; phone: string; cpf?: string; documentType?: string; document?: string;
   neighborhood: string; categories: string[]; specialties: string[]; neighborhoods: string[]; availability: string;
   disabled?: boolean; recoveryCode?: string; recoveryExpiresAt?: number;
+  emailVerifiedAt?: string; emailVerificationCode?: string; emailVerificationExpiresAt?: number;
 };
 type RequestRecord = {
   id: string; customerId: string; category: string; description: string; neighborhood: string;
@@ -58,10 +59,24 @@ function accountById(id: string | undefined) {
   return database.accounts.find((account) => account.id === id && !account.disabled);
 }
 function currentUser(options: RequestInit, required = true) {
-  const token = new Headers(options.headers).get('Authorization')?.replace(/^Bearer\s+/i, '');
+  const token = tokenFrom(options);
   const account = token ? accountById(sessions.get(token)) : undefined;
   if (!account && required) fail('Entre na sua conta para continuar.', 401);
   return account;
+}
+function tokenFrom(options: RequestInit) {
+  return new Headers(options.headers).get('Authorization')?.replace(/^Bearer\s+/i, '');
+}
+function revokeSessions(accountId: string) {
+  for (const [token, id] of sessions) if (id === accountId) sessions.delete(token);
+}
+function settingsProfile(account: Account) {
+  return {
+    id: account.id, name: account.name, email: account.email, phone: account.phone,
+    neighborhood: account.neighborhood, categories: account.categories, specialties: account.specialties,
+    neighborhoods: account.neighborhoods, availability: account.availability, role: account.role,
+    email_verified_at: account.emailVerifiedAt ?? null,
+  };
 }
 function emailValue(value: unknown) { return typeof value === 'string' ? value.trim().toLocaleLowerCase('pt-BR') : ''; }
 function textValue(value: unknown) { return typeof value === 'string' ? value.trim() : ''; }
@@ -201,6 +216,86 @@ export async function localDatabase(path: string, options: RequestInit = {}): Pr
     if (password.length < 8 || password.length > 128) fail('Use uma senha de 8 a 128 caracteres.', 400, { newPassword: 'Use uma senha de 8 a 128 caracteres.' });
     account.password = password; account.recoveryCode = undefined; account.recoveryExpiresAt = undefined;
     return { message: 'Senha redefinida. Entre novamente.' };
+  }
+
+  if (route.length === 1 && route[0] === 'account' && method === 'GET') {
+    const user = currentUser(options)!;
+    return clone({ profile: settingsProfile(user), mailMode: 'local' });
+  }
+  if (route.length === 1 && route[0] === 'account' && method === 'PATCH') {
+    const user = currentUser(options)!;
+    requireText(body, ['name', 'phone', 'currentPassword']);
+    if (user.password !== textValue(body.currentPassword)) fail('A senha atual está incorreta.', 400, { currentPassword: 'Confira sua senha atual.' });
+    const fields: Record<string, string> = {};
+    const name = textValue(body.name);
+    const phone = textValue(body.phone).replace(/\D/g, '');
+    if (name.length > 150) fields.name = 'Use até 150 caracteres.';
+    if (!/^\d{10,11}$/.test(phone)) fields.phone = 'Informe o telefone com DDD (10 ou 11 dígitos).';
+    if (user.role === 'customer') {
+      const neighborhood = textValue(body.neighborhood);
+      if (!database.neighborhoods.some((item) => item.value === neighborhood)) fields.neighborhood = 'Selecione uma localidade do catálogo.';
+      if (Object.keys(fields).length) fail('Confira os campos destacados.', 400, fields);
+      user.name = name; user.phone = phone; user.neighborhood = neighborhood;
+    } else {
+      const categories = Array.isArray(body.categories) && body.categories.every((value) => typeof value === 'string') ? body.categories as string[] : [];
+      const specialties = Array.isArray(body.specialties) && body.specialties.every((value) => typeof value === 'string') ? body.specialties as string[] : [];
+      const neighborhoods = Array.isArray(body.neighborhoods) && body.neighborhoods.every((value) => typeof value === 'string') ? body.neighborhoods as string[] : [];
+      const availability = textValue(body.availability);
+      const services = database.services.filter((item) => categories.includes(item.value));
+      const validSpecialties = new Set(services.flatMap((item) => item.specialties));
+      const validNeighborhoods = new Set([...database.neighborhoods, ...database.coverageRegions].map((item) => item.value));
+      if (!categories.length || categories.some((value) => !database.services.some((item) => item.value === value))) fields.categories = 'Selecione pelo menos uma categoria válida.';
+      if (!specialties.length || specialties.some((value) => !validSpecialties.has(value))) fields.specialties = 'Selecione especialidades compatíveis com as categorias.';
+      if (!neighborhoods.length || neighborhoods.some((value) => !validNeighborhoods.has(value))) fields.neighborhoods = 'Selecione pelo menos um local válido.';
+      if (!availability || availability.length > 500) fields.availability = 'Informe a disponibilidade, com até 500 caracteres.';
+      if (Object.keys(fields).length) fail('Confira os campos destacados.', 400, fields);
+      user.name = name; user.phone = phone; user.categories = categories; user.specialties = specialties;
+      user.neighborhoods = neighborhoods; user.availability = availability;
+    }
+    return { message: 'Perfil atualizado com sucesso.' };
+  }
+  if (route[0] === 'account' && route[1] === 'password' && route.length === 2 && method === 'POST') {
+    const user = currentUser(options)!;
+    requireText(body, ['currentPassword', 'newPassword']);
+    if (user.password !== textValue(body.currentPassword)) fail('A senha atual está incorreta.', 400, { currentPassword: 'Confira sua senha atual.' });
+    const newPassword = textValue(body.newPassword);
+    if (newPassword.length < 8 || newPassword.length > 128) fail('Use uma senha de 8 a 128 caracteres.', 400, { newPassword: 'Use uma senha de 8 a 128 caracteres.' });
+    user.password = newPassword;
+    revokeSessions(user.id);
+    return { message: 'Senha alterada. Entre novamente com a nova senha.' };
+  }
+  if (route[0] === 'account' && route[1] === 'close' && route.length === 2 && method === 'POST') {
+    const user = currentUser(options)!;
+    requireText(body, ['currentPassword']);
+    if (user.password !== textValue(body.currentPassword)) fail('A senha atual está incorreta.', 400, { currentPassword: 'Confira sua senha atual.' });
+    const hasActiveRequest = database.requests.some((request) => {
+      if (!['Aceita', 'Em andamento'].includes(request.status)) return false;
+      if (user.role === 'customer') return request.customerId === user.id;
+      return database.proposals.some((proposal) => proposal.requestId === request.id && proposal.providerId === user.id && proposal.status === 'Aceita');
+    });
+    if (hasActiveRequest) fail('Resolva os atendimentos aceitos ou em andamento antes de encerrar o acesso à conta.', 409);
+    user.disabled = true;
+    revokeSessions(user.id);
+    return { message: 'Acesso à conta encerrado. Os pedidos e registros foram preservados.' };
+  }
+  if (route[0] === 'account' && route[1] === 'verify-email' && route.length === 2 && method === 'POST') {
+    const user = currentUser(options)!;
+    if (user.emailVerifiedAt) return { message: 'Este e-mail já está confirmado.' };
+    user.emailVerificationCode = String(Math.floor(100000 + Math.random() * 900000));
+    user.emailVerificationExpiresAt = Date.now() + 15 * 60 * 1000;
+    return { message: 'Código local de confirmação gerado. Nenhum e-mail foi enviado.', code: user.emailVerificationCode };
+  }
+  if (route[0] === 'account' && route[1] === 'confirm-email' && route.length === 2 && method === 'POST') {
+    const user = currentUser(options)!;
+    requireText(body, ['token']);
+    if (user.emailVerifiedAt) return { message: 'Este e-mail já está confirmado.' };
+    if (!user.emailVerificationCode || user.emailVerificationCode !== textValue(body.token) || (user.emailVerificationExpiresAt ?? 0) < Date.now()) {
+      fail('Código inválido ou expirado. Solicite outro código local.', 400, { token: 'Confira o código de confirmação.' });
+    }
+    user.emailVerifiedAt = now();
+    user.emailVerificationCode = undefined;
+    user.emailVerificationExpiresAt = undefined;
+    return { message: 'E-mail confirmado com sucesso.' };
   }
 
   if (route[0] === 'providers' && route.length === 1 && method === 'GET') {
